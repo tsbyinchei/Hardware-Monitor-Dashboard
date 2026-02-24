@@ -1,0 +1,7 @@
+Flask==3.0.0
+psutil==5.9.6
+wmi==1.5.1
+pypiwin32==223
+py-cpuinfo==9.0.0
+GPUtil==1.4.0
+setuptools

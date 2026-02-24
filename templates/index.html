@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TsByin Hardware Monitor</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="top-bar">
+        <div class="logo">
+            <i class="fa-solid fa-microchip"></i> TsByin Monitor
+        </div>
+        <div class="system-name" id="node-name">Loading System...</div>
+    </header>
+
+    <div class="container">
+        <div class="gauges-container">
+            <div class="gauge-card">
+                <div class="circular-chart" id="cpu-gauge" style="--percent: 0; --color: #3498db;">
+                    <div class="circular-chart-inner">
+                        <span class="gauge-value" id="cpu-gauge-val">0%</span>
+                        <span class="gauge-label">CPU</span>
+                    </div>
+                </div>
+            </div>
+            <div class="gauge-card">
+                <div class="circular-chart" id="ram-gauge" style="--percent: 0; --color: #9b59b6;">
+                    <div class="circular-chart-inner">
+                        <span class="gauge-value" id="ram-gauge-val">0%</span>
+                        <span class="gauge-label">RAM</span>
+                    </div>
+                </div>
+            </div>
+            <div class="gauge-card">
+                <div class="circular-chart" id="gpu-gauge" style="--percent: 0; --color: #2ecc71;">
+                    <div class="circular-chart-inner">
+                        <span class="gauge-value" id="gpu-gauge-val">0%</span>
+                        <span class="gauge-label">GPU</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="data-grid">
+            <div class="column">
+                <div class="info-box">
+                    <div class="box-title"><i class="fa-brands fa-windows"></i> HỆ ĐIỀU HÀNH & MÁY TÍNH</div>
+                    <div class="box-content" id="os-hw-content">Loading...</div>
+                </div>
+
+                <div class="info-box mt-3" id="battery-box" style="display: none;">
+                    <div class="box-title"><i class="fa-solid fa-battery-half"></i> THÔNG TIN PIN (BATTERY)</div>
+                    <div class="box-content" id="battery-content">Loading...</div>
+                </div>
+            </div>
+
+            <div class="column">
+                <div class="info-box">
+                    <div class="box-title"><i class="fa-solid fa-desktop"></i> CARD ĐỒ HỌA (GPU)</div>
+                    <div class="box-content" id="gpu-content">Loading...</div>
+                </div>
+
+                <div class="info-box mt-3">
+                    <div class="box-title"><i class="fa-solid fa-hard-drive"></i> LƯU TRỮ (DISKS)</div>
+                    <div class="box-content" id="disk-content">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>Copyright © 2026 <strong>TsByin (Sỹ)</strong>. All rights reserved.</p>
+        <p>Server IP: <strong>{{ server_ip }}</strong></p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
