@@ -18,20 +18,13 @@
     <div class="container">
         <div class="gauges-container">
             <div class="gauge-card">
-                <div class="circular-chart" id="cpu-gauge" style="--percent: 0; --color: #3498db;">
-                    <div class="circular-chart-inner">
-                        <span class="gauge-value" id="cpu-gauge-val">0%</span>
-                        <span class="gauge-label">CPU</span>
-                    </div>
-                </div>
-            </div>
-            <div class="gauge-card">
                 <div class="circular-chart" id="ram-gauge" style="--percent: 0; --color: #9b59b6;">
                     <div class="circular-chart-inner">
                         <span class="gauge-value" id="ram-gauge-val">0%</span>
                         <span class="gauge-label">RAM</span>
                     </div>
                 </div>
+                <div class="gauge-meta" id="ram-meta">Loading RAM...</div>
             </div>
             <div class="gauge-card">
                 <div class="circular-chart" id="gpu-gauge" style="--percent: 0; --color: #2ecc71;">
@@ -40,7 +33,10 @@
                         <span class="gauge-label">GPU</span>
                     </div>
                 </div>
+                <div class="gauge-meta" id="gpu-meta">Loading GPU...</div>
             </div>
+            <!-- dynamic containers for disks and network gauges -->
+            <div id="extra-gauges" style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; width:100%;"></div>
         </div>
 
         <div class="data-grid">
@@ -54,6 +50,30 @@
                     <div class="box-title"><i class="fa-solid fa-battery-half"></i> THÔNG TIN PIN (BATTERY)</div>
                     <div class="box-content" id="battery-content">Loading...</div>
                 </div>
+
+                <div class="info-box mt-3">
+                    <div class="box-title"><i class="fa-solid fa-memory"></i> CHI TIẾT RAM (MODULES)</div>
+                    <div class="box-content" id="ram-modules">Loading...</div>
+                </div>
+
+                <!-- CPU detailed box -->
+                <div class="info-box mt-3" id="cpu-box">
+                    <div class="box-title"><i class="fa-solid fa-microchip"></i> CPU</div>
+                    <div class="box-content" id="cpu-content">
+                        <div class="cpu-header" style="display:flex; align-items:center; gap:12px;">
+                            <div style="flex:1;" id="cpu-name">Loading CPU...</div>
+                            <div id="cpu-load-gauge">
+                                <div class="circular-chart" id="cpu-gauge" style="--percent: 0; --color: #3498db; width:80px; height:80px;">
+                                    <div class="circular-chart-inner">
+                                        <span class="gauge-value" id="cpu-gauge-val">0%</span>
+                                        <span class="gauge-label">CPU</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="cpu-details" style="margin-top:8px; color:#ddd; font-size:0.95rem;">Loading details...</div>
+                    </div>
+                </div>
             </div>
 
             <div class="column">
@@ -66,8 +86,15 @@
                     <div class="box-title"><i class="fa-solid fa-hard-drive"></i> LƯU TRỮ (DISKS)</div>
                     <div class="box-content" id="disk-content">Loading...</div>
                 </div>
+
+                <div class="info-box mt-3">
+                    <div class="box-title"><i class="fa-solid fa-network-wired"></i> MẠNG (NETWORK ADAPTERS)</div>
+                    <div class="box-content" id="network-content">Loading...</div>
+                </div>
             </div>
         </div>
+
+        <div style="margin-top:14px; color:var(--muted-color, #999);" id="last-updated">Last updated: --</div>
     </div>
 
     <footer>
