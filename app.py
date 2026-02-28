@@ -83,14 +83,28 @@ def collect_stats():
             # --- CPU ---
             try:
                 p = c.Win32_Processor()[0]
-                cpu_freq = psutil.cpu_freq()
+                max_mhz = getattr(p, 'MaxClockSpeed', None)
+                current_mhz = None
+                # Xung hiện tại: dùng Win32_PerfFormattedData (Processor Performance %) thay vì psutil (chỉ trả nominal trên Windows)
+                try:
+                    for perf in c.Win32_PerfFormattedData_Counters_ProcessorInformation():
+                        if getattr(perf, 'Name', '') == '_Total':
+                            pct_perf = getattr(perf, 'PercentProcessorPerformance', None)
+                            if pct_perf is not None and max_mhz:
+                                current_mhz = round(max_mhz * (float(pct_perf) / 100.0), 1)
+                            break
+                except Exception:
+                    pass
+                if current_mhz is None:
+                    cpu_freq = psutil.cpu_freq()
+                    current_mhz = round(cpu_freq.current, 1) if cpu_freq and cpu_freq.current else 'N/A'
                 cpu_data = {
                     'name': getattr(p, 'Name', 'N/A'),
                     'manufacturer': getattr(p, 'Manufacturer', 'N/A'),
                     'cores': getattr(p, 'NumberOfCores', 'N/A'),
                     'logical_processors': getattr(p, 'NumberOfLogicalProcessors', 'N/A'),
-                    'max_clock_mhz': getattr(p, 'MaxClockSpeed', 'N/A'),
-                    'current_clock_mhz': round(cpu_freq.current, 1) if cpu_freq else 'N/A'
+                    'max_clock_mhz': max_mhz if max_mhz else 'N/A',
+                    'current_clock_mhz': current_mhz
                 }
             except Exception:
                 cpu_data = {
@@ -135,32 +149,68 @@ def collect_stats():
 
             stats['ram'] = ram_data
 
-            # --- Battery ---
+            # --- Battery --- (ưu tiên psutil vì hoạt động tốt hơn trên nhiều laptop)
             battery_data = None
             try:
-                batteries = c.Win32_Battery()
-                if batteries:
-                    b = batteries[0]
-                    design_cap = int(getattr(b, 'DesignCapacity', 0)) or 0
-                    full_cap = int(getattr(b, 'FullChargeCapacity', 0)) or 0
-                    est = getattr(b, 'EstimatedChargeRemaining', None)
-                    wear_level = None
-                    if design_cap and full_cap:
-                        try:
-                            wear_level = round((1 - (full_cap / design_cap)) * 100, 1)
-                        except Exception:
-                            wear_level = None
-
+                ps_bat = psutil.sensors_battery()
+                if ps_bat is not None:
+                    status_text = 'Đang sạc' if ps_bat.power_plugged else 'Đang dùng pin'
                     battery_data = {
-                        'name': getattr(b, 'Name', 'Battery'),
-                        'status': getattr(b, 'BatteryStatus', 'N/A'),
-                        'design_mwh': design_cap,
-                        'full_mwh': full_cap,
-                        'wear_level_percent': wear_level,
-                        'charge_percent': est
+                        'name': 'Battery',
+                        'status': status_text,
+                        'design_mwh': 0,
+                        'full_mwh': 0,
+                        'wear_level_percent': None,
+                        'charge_percent': int(ps_bat.percent) if ps_bat.percent is not None else None,
+                        'power_plugged': ps_bat.power_plugged,
+                        'secsleft': ps_bat.secsleft
                     }
             except Exception:
-                battery_data = None
+                pass
+
+            # Fallback: WMI Win32_Battery (dung lượng, độ chai)
+            if battery_data is None:
+                try:
+                    batteries = c.Win32_Battery()
+                    if batteries:
+                        b = batteries[0]
+                        design_cap = int(getattr(b, 'DesignCapacity', 0)) or 0
+                        full_cap = int(getattr(b, 'FullChargeCapacity', 0)) or 0
+                        est = getattr(b, 'EstimatedChargeRemaining', None)
+                        wear_level = None
+                        if design_cap and full_cap:
+                            try:
+                                wear_level = round((1 - (full_cap / design_cap)) * 100, 1)
+                            except Exception:
+                                wear_level = None
+
+                        battery_data = {
+                            'name': getattr(b, 'Name', 'Battery'),
+                            'status': getattr(b, 'BatteryStatus', 'N/A'),
+                            'design_mwh': design_cap,
+                            'full_mwh': full_cap,
+                            'wear_level_percent': wear_level,
+                            'charge_percent': est
+                        }
+                except Exception:
+                    battery_data = None
+            else:
+                # Bổ sung dung lượng từ WMI nếu psutil đã có % pin
+                try:
+                    batteries = c.Win32_Battery()
+                    if batteries:
+                        b = batteries[0]
+                        design_cap = int(getattr(b, 'DesignCapacity', 0)) or 0
+                        full_cap = int(getattr(b, 'FullChargeCapacity', 0)) or 0
+                        if design_cap and full_cap:
+                            battery_data['design_mwh'] = design_cap
+                            battery_data['full_mwh'] = full_cap
+                            try:
+                                battery_data['wear_level_percent'] = round((1 - (full_cap / design_cap)) * 100, 1)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
 
             stats['battery'] = battery_data
 
@@ -173,7 +223,7 @@ def collect_stats():
             except Exception:
                 nv_dict = {}
 
-            # collect NVML info map if available
+            # collect NVML info map if available (VRAM + GPU utilization %)
             nvml_map = {}
             if PYNVML_AVAILABLE:
                 try:
@@ -184,9 +234,16 @@ def collect_stats():
                             name_raw = pynvml.nvmlDeviceGetName(handle)
                             name = name_raw.decode() if isinstance(name_raw, bytes) else str(name_raw)
                             meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                            util = None
+                            try:
+                                util_rates = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                                util = util_rates.gpu if hasattr(util_rates, 'gpu') else None
+                            except Exception:
+                                pass
                             nvml_map[name] = {
                                 'total_mb': int(meminfo.total // (1024**2)),
-                                'used_mb': int(meminfo.used // (1024**2))
+                                'used_mb': int(meminfo.used // (1024**2)),
+                                'load_percent': util
                             }
                         except Exception:
                             continue
@@ -209,21 +266,25 @@ def collect_stats():
                     temp = None
                     mem_total_mb = None
                     mem_nvml_mb = None
-                    # try GPUtil mapping by substring match if exact name not found
+                    # GPUtil mapping (chỉ NVIDIA)
                     matched = None
                     for k, gp in nv_dict.items():
-                        if k and k in name:
+                        if k and (k in name or name in k):
                             matched = gp
                             break
                     if matched:
                         mem_total_mb = int(matched.memoryTotal)
-                        load = round(matched.load * 100, 1)
+                        if matched.load is not None and matched.load > 0:
+                            load = round(matched.load * 100, 1)
                         temp = matched.temperature
 
-                    # try NVML map by substring
+                    # NVML: VRAM + GPU utilization (chính xác hơn GPUtil)
                     for k, v in nvml_map.items():
-                        if k and k in name:
+                        if k and (k in name or name in k):
                             mem_nvml_mb = v.get('total_mb')
+                            nvml_load = v.get('load_percent')
+                            if nvml_load is not None:
+                                load = int(nvml_load)
                             break
 
                     gpu_list.append({
