@@ -22,6 +22,7 @@
         </div>
         <div class="header-right">
             <span class="system-name" id="node-name">Loading...</span>
+            <span class="uptime-badge" id="uptime-badge" title="Thời gian hoạt động"></span>
             <span class="last-updated" id="last-updated">--</span>
             <button class="btn-refresh" id="btn-refresh" title="Làm mới">
                 <i class="fa-solid fa-rotate"></i>
@@ -59,6 +60,10 @@
                 <i class="fa-brands fa-windows"></i>
                 <span>Hệ điều hành</span>
             </a>
+            <a href="#" class="nav-item" data-section="processes">
+                <i class="fa-solid fa-list-check"></i>
+                <span>Tiến trình</span>
+            </a>
         </nav>
     </aside>
 
@@ -67,7 +72,7 @@
     <main class="main-content">
         <div class="content-wrapper">
             <!-- CPU Section -->
-            <section class="detail-section" id="section-cpu">
+            <section class="detail-section active" id="section-cpu">
                 <div class="section-header">
                     <h1><i class="fa-solid fa-microchip"></i> CPU</h1>
                     <button class="btn-copy" data-copy="cpu" title="Sao chép">
@@ -153,6 +158,25 @@
                     </button>
                 </div>
                 <div class="detail-card" id="os-content">
+                    <div class="loading">Đang tải...</div>
+                </div>
+            </section>
+
+            <!-- Processes Section -->
+            <section class="detail-section" id="section-processes">
+                <div class="section-header">
+                    <h1><i class="fa-solid fa-list-check"></i> Tiến trình</h1>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <div class="tab-group" id="proc-tab-group">
+                            <button class="tab-btn active" data-tab="cpu">Top CPU</button>
+                            <button class="tab-btn" data-tab="mem">Top RAM</button>
+                        </div>
+                        <button class="btn-copy" data-copy="processes" title="Sao chép">
+                            <i class="fa-regular fa-copy"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="detail-card" id="processes-content">
                     <div class="loading">Đang tải...</div>
                 </div>
             </section>
