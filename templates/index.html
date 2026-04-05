@@ -22,6 +22,12 @@
         </div>
         <div class="header-right">
             <span class="system-name" id="node-name">Loading...</span>
+            <span class="conn-mode" id="conn-mode">Connecting...</span>
+            <div class="refresh-control" title="Chu kỳ cập nhật fallback HTTP polling">
+                <i class="fa-solid fa-gauge-simple-high"></i>
+                <input id="refresh-rate" type="range" min="1" max="10" value="3" aria-label="Refresh rate seconds">
+                <span id="refresh-rate-label">3s</span>
+            </div>
             <span class="uptime-badge" id="uptime-badge" title="Thời gian hoạt động"></span>
             <span class="last-updated" id="last-updated">--</span>
             <button class="btn-refresh" id="btn-refresh" title="Làm mới">

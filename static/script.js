@@ -1,20 +1,29 @@
 const API = '/api/detailed_stats';
+const STREAM_API = '/api/stream';
+
 let currentData = null;
 let currentSection = 'cpu';
 let currentProcTab = 'cpu'; // 'cpu' or 'mem'
 
+let refreshIntervalMs = 3000;
+let pollTimer = null;
+let stream = null;
+let usingSSE = false;
+
 // History for mini charts (~60 points)
 const HISTORY_LENGTH = 60;
-let cpuHistory = [];
-let ramHistory = [];
-let netSentHistory = [];
-let netRecvHistory = [];
-let diskReadHistory = [];
-let diskWriteHistory = [];
-let cpuChart = null;
-let ramChart = null;
-let netChart = null;
-let diskIoChart = null;
+const cpuHistory = [];
+const ramHistory = [];
+const netSentHistory = [];
+const netRecvHistory = [];
+const diskReadHistory = [];
+const diskWriteHistory = [];
+const charts = {
+    cpu: null,
+    ram: null,
+    net: null,
+    disk: null,
+};
 
 // ===== Navigation =====
 function initNavigation() {
@@ -54,11 +63,13 @@ function switchSection(section) {
     const target = document.getElementById(`section-${section}`);
     if (target) target.classList.add('active');
 
+    renderActiveSection();
+
     setTimeout(() => {
-        cpuChart?.resize();
-        ramChart?.resize();
-        netChart?.resize();
-        diskIoChart?.resize();
+        charts.cpu?.resize();
+        charts.ram?.resize();
+        charts.net?.resize();
+        charts.disk?.resize();
     }, 100);
 }
 
@@ -109,6 +120,31 @@ function initRefresh() {
     });
 }
 
+function initRefreshRateControl() {
+    const slider = document.getElementById('refresh-rate');
+    const label = document.getElementById('refresh-rate-label');
+    if (!slider || !label) return;
+
+    const applyRate = () => {
+        const sec = Math.max(1, Number(slider.value || 3));
+        label.textContent = `${sec}s`;
+        refreshIntervalMs = sec * 1000;
+        if (!usingSSE) {
+            schedulePolling();
+        }
+    };
+
+    slider.addEventListener('input', applyRate);
+    applyRate();
+}
+
+function setConnectionMode(text, cls) {
+    const badge = document.getElementById('conn-mode');
+    if (!badge) return;
+    badge.textContent = text;
+    badge.className = `conn-mode ${cls}`;
+}
+
 // ===== Helpers =====
 function infoRow(label, value, extra = '') {
     return `<div class="info-row ${extra}"><span class="info-label">${label}</span><span class="info-value">${value ?? 'N/A'}</span></div>`;
@@ -151,9 +187,48 @@ function renderCPU(data) {
 
     const archMap = { 0: 'x86', 1: 'MIPS', 2: 'Alpha', 3: 'PowerPC', 5: 'ARM', 6: 'ia64', 9: 'x64' };
 
-    let perCoreHtml = '';
-    if (perCore.length > 0) {
-        perCoreHtml = `
+    if (!el.dataset.initialized) {
+        el.innerHTML = `
+            <div id="cpu-main"></div>
+            <div class="chart-container" style="height:140px;">
+                <canvas id="cpu-chart"></canvas>
+            </div>
+            <div id="cpu-percore"></div>
+        `;
+        el.dataset.initialized = '1';
+    }
+
+    const cpuMain = document.getElementById('cpu-main');
+    const cpuPerCore = document.getElementById('cpu-percore');
+
+    if (cpuMain) {
+        cpuMain.innerHTML = `
+            <div class="gauge-wrapper">
+                <div class="circular-gauge" style="--percent: ${percent}; --gauge-color: #06b6d4;">
+                    <div class="circular-gauge-inner">
+                        <span class="gauge-value">${percent}%</span>
+                        <span class="gauge-label">Sử dụng</span>
+                    </div>
+                </div>
+                <div style="flex:1; min-width:200px;">
+                    ${infoRow('Tên CPU', `<span style="font-family:Inter;">${cpu.name}</span>`)}
+                    ${infoRow('Nhà sản xuất', cpu.manufacturer)}
+                    ${infoRow('Socket', cpu.socket)}
+                    ${infoRow('Số nhân / Luồng', `${cpu.cores} / ${cpu.logical_processors}`)}
+                    ${infoRow('Kiến trúc', archMap[cpu.architecture] || cpu.architecture)}
+                    ${infoRow('Xung tối đa', cpu.max_clock_mhz !== 'N/A' ? `${cpu.max_clock_mhz} MHz` : 'N/A')}
+                    ${infoRow('Xung hiện tại', cpu.current_clock_mhz !== 'N/A' ? `${cpu.current_clock_mhz} MHz` : 'N/A')}
+                    ${cpu.l2_cache_kb ? infoRow('Cache L2', `${cpu.l2_cache_kb} KB`) : ''}
+                    ${cpu.l3_cache_kb ? infoRow('Cache L3', `${cpu.l3_cache_kb} KB`) : ''}
+                    ${infoRow('Nhiệt độ', tempBadge(cpu.temp_c))}
+                    ${cpu.virtualization != null ? infoRow('Ảo hóa (VT-x/AMD-V)', cpu.virtualization ? '<span class="text-success">Bật</span>' : '<span class="text-muted">Tắt</span>') : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    if (cpuPerCore) {
+        cpuPerCore.innerHTML = perCore.length > 0 ? `
             <div style="margin-top:20px;">
                 <h3 class="subsection-title"><i class="fa-solid fa-layer-group"></i> Sử dụng từng nhân</h3>
                 <div class="core-grid">
@@ -174,36 +249,8 @@ function renderCPU(data) {
                     }).join('')}
                 </div>
             </div>
-        `;
+        ` : '';
     }
-
-    el.innerHTML = `
-        <div class="gauge-wrapper">
-            <div class="circular-gauge" style="--percent: ${percent}; --gauge-color: #06b6d4;">
-                <div class="circular-gauge-inner">
-                    <span class="gauge-value">${percent}%</span>
-                    <span class="gauge-label">Sử dụng</span>
-                </div>
-            </div>
-            <div style="flex:1; min-width:200px;">
-                ${infoRow('Tên CPU', `<span style="font-family:Inter;">${cpu.name}</span>`)}
-                ${infoRow('Nhà sản xuất', cpu.manufacturer)}
-                ${infoRow('Socket', cpu.socket)}
-                ${infoRow('Số nhân / Luồng', `${cpu.cores} / ${cpu.logical_processors}`)}
-                ${infoRow('Kiến trúc', archMap[cpu.architecture] || cpu.architecture)}
-                ${infoRow('Xung tối đa', cpu.max_clock_mhz !== 'N/A' ? `${cpu.max_clock_mhz} MHz` : 'N/A')}
-                ${infoRow('Xung hiện tại', cpu.current_clock_mhz !== 'N/A' ? `${cpu.current_clock_mhz} MHz` : 'N/A')}
-                ${cpu.l2_cache_kb ? infoRow('Cache L2', `${cpu.l2_cache_kb} KB`) : ''}
-                ${cpu.l3_cache_kb ? infoRow('Cache L3', `${cpu.l3_cache_kb} KB`) : ''}
-                ${infoRow('Nhiệt độ', tempBadge(cpu.temp_c))}
-                ${cpu.virtualization != null ? infoRow('Ảo hóa (VT-x/AMD-V)', cpu.virtualization ? '<span class="text-success">Bật</span>' : '<span class="text-muted">Tắt</span>') : ''}
-            </div>
-        </div>
-        <div class="chart-container" style="height:140px;">
-            <canvas id="cpu-chart"></canvas>
-        </div>
-        ${perCoreHtml}
-    `;
 
     updateCpuChart();
 }
@@ -221,71 +268,85 @@ function renderRAM(data) {
 
     let progressClass = percent >= 90 ? 'danger' : percent >= 75 ? 'warning' : '';
 
-    const memTypeMap = {
-        20: 'DDR', 21: 'DDR2', 24: 'DDR3', 26: 'DDR4', 34: 'DDR5', 0: 'Unknown'
-    };
-
-    el.innerHTML = `
-        <div class="gauge-wrapper">
-            <div class="circular-gauge" style="--percent: ${percent}; --gauge-color: #a855f7;">
-                <div class="circular-gauge-inner">
-                    <span class="gauge-value">${percent}%</span>
-                    <span class="gauge-label">Sử dụng</span>
-                </div>
+    if (!el.dataset.initialized) {
+        el.innerHTML = `
+            <div id="ram-main"></div>
+            <div class="chart-container" style="height:140px;">
+                <canvas id="ram-chart"></canvas>
             </div>
-            <div style="flex:1; min-width:200px;">
-                ${infoRow('Tổng dung lượng', `${total} GB`)}
-                ${infoRow('Đã sử dụng', `${used} GB`)}
-                ${infoRow('Còn trống', `${ram.available_gb ?? (total - used).toFixed(2)} GB`)}
-                ${ram.cached_gb ? infoRow('Cache', `${ram.cached_gb} GB`) : ''}
-                ${ram.num_modules ? infoRow('Số thanh RAM', `${ram.num_modules} thanh`) : ''}
-                ${ram.max_speed_mhz ? infoRow('Tốc độ', `${ram.max_speed_mhz} MHz`) : ''}
-                <div class="info-row" style="align-items:center;">
-                    <span class="info-label">Dung lượng dùng</span>
-                    <div class="progress-bar" style="flex:1;">
-                        <div class="progress-fill ${progressClass}" style="width:${percent}%"></div>
+            <div id="ram-extra"></div>
+        `;
+        el.dataset.initialized = '1';
+    }
+
+    const ramMain = document.getElementById('ram-main');
+    const ramExtra = document.getElementById('ram-extra');
+
+    if (ramMain) {
+        ramMain.innerHTML = `
+            <div class="gauge-wrapper">
+                <div class="circular-gauge" style="--percent: ${percent}; --gauge-color: #a855f7;">
+                    <div class="circular-gauge-inner">
+                        <span class="gauge-value">${percent}%</span>
+                        <span class="gauge-label">Sử dụng</span>
+                    </div>
+                </div>
+                <div style="flex:1; min-width:200px;">
+                    ${infoRow('Tổng dung lượng', `${total} GB`)}
+                    ${infoRow('Đã sử dụng', `${used} GB`)}
+                    ${infoRow('Còn trống', `${ram.available_gb ?? (total - used).toFixed(2)} GB`)}
+                    ${ram.cached_gb ? infoRow('Cache', `${ram.cached_gb} GB`) : ''}
+                    ${ram.num_modules ? infoRow('Số thanh RAM', `${ram.num_modules} thanh`) : ''}
+                    ${ram.max_speed_mhz ? infoRow('Tốc độ', `${ram.max_speed_mhz} MHz`) : ''}
+                    <div class="info-row" style="align-items:center;">
+                        <span class="info-label">Dung lượng dùng</span>
+                        <div class="progress-bar" style="flex:1;">
+                            <div class="progress-fill ${progressClass}" style="width:${percent}%"></div>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
-        <div class="chart-container" style="height:140px;">
-            <canvas id="ram-chart"></canvas>
-        </div>
-        ${ram.swap_total_gb > 0 ? `
-        <div class="swap-section">
-            <h3 class="subsection-title"><i class="fa-solid fa-shuffle"></i> Bộ nhớ ảo (Swap/Page)</h3>
-            <div class="info-row"><span class="info-label">Tổng Swap</span><span class="info-value">${ram.swap_total_gb} GB</span></div>
-            <div class="info-row"><span class="info-label">Đang dùng</span><span class="info-value">${ram.swap_used_gb} GB (${ram.swap_percent}%)</span></div>
-            <div class="progress-bar" style="margin-top:8px;">
-                <div class="progress-fill ${ram.swap_percent >= 80 ? 'danger' : ''}" style="width:${ram.swap_percent}%"></div>
+        `;
+    }
+
+    if (ramExtra) {
+        ramExtra.innerHTML = `
+            ${ram.swap_total_gb > 0 ? `
+            <div class="swap-section">
+                <h3 class="subsection-title"><i class="fa-solid fa-shuffle"></i> Bộ nhớ ảo (Swap/Page)</h3>
+                <div class="info-row"><span class="info-label">Tổng Swap</span><span class="info-value">${ram.swap_total_gb} GB</span></div>
+                <div class="info-row"><span class="info-label">Đang dùng</span><span class="info-value">${ram.swap_used_gb} GB (${ram.swap_percent}%)</span></div>
+                <div class="progress-bar" style="margin-top:8px;">
+                    <div class="progress-fill ${ram.swap_percent >= 80 ? 'danger' : ''}" style="width:${ram.swap_percent}%"></div>
+                </div>
             </div>
-        </div>
-        ` : ''}
-        ${modules.length ? `
-        <div style="margin-top:24px;">
-            <h3 class="subsection-title"><i class="fa-solid fa-memory"></i> Chi tiết từng thanh RAM (${modules.length} thanh)</h3>
-            <div class="info-table-wrapper">
-            <table class="info-table">
-                <thead><tr><th>Slot</th><th>Dung lượng</th><th>Loại</th><th>Tốc độ (XMP)</th><th>Form Factor</th><th>Hãng</th><th>Part Number</th><th>Điện áp</th></tr></thead>
-                <tbody>
-                    ${modules.map(m => `
-                        <tr>
-                            <td>${m.slot || m.bank}</td>
-                            <td>${m.capacity_gb} GB</td>
-                            <td><span class="badge badge-accent">${m.memory_type}</span></td>
-                            <td>${m.speed_mhz} MHz${m.configured_speed_mhz && m.configured_speed_mhz !== m.speed_mhz ? ` <span class="text-muted small">(${m.configured_speed_mhz})</span>` : ''}</td>
-                            <td>${m.form_factor}</td>
-                            <td>${m.manufacturer}</td>
-                            <td class="text-muted small">${m.part_number || '-'}</td>
-                            <td>${m.voltage ? m.voltage + ' mV' : '-'}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
+            ` : ''}
+            ${modules.length ? `
+            <div style="margin-top:24px;">
+                <h3 class="subsection-title"><i class="fa-solid fa-memory"></i> Chi tiết từng thanh RAM (${modules.length} thanh)</h3>
+                <div class="info-table-wrapper">
+                <table class="info-table">
+                    <thead><tr><th>Slot</th><th>Dung lượng</th><th>Loại</th><th>Tốc độ (XMP)</th><th>Form Factor</th><th>Hãng</th><th>Part Number</th><th>Điện áp</th></tr></thead>
+                    <tbody>
+                        ${modules.map(m => `
+                            <tr>
+                                <td>${m.slot || m.bank}</td>
+                                <td>${m.capacity_gb} GB</td>
+                                <td><span class="badge badge-accent">${m.memory_type}</span></td>
+                                <td>${m.speed_mhz} MHz${m.configured_speed_mhz && m.configured_speed_mhz !== m.speed_mhz ? ` <span class="text-muted small">(${m.configured_speed_mhz})</span>` : ''}</td>
+                                <td>${m.form_factor}</td>
+                                <td>${m.manufacturer}</td>
+                                <td class="text-muted small">${m.part_number || '-'}</td>
+                                <td>${m.voltage ? m.voltage + ' mV' : '-'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+                </div>
             </div>
-        </div>
-        ` : ''}
-    `;
+            ` : ''}
+        `;
+    }
 
     updateRamChart();
 }
@@ -297,7 +358,9 @@ function renderGPU(data) {
     if (!gpus.length) { el.innerHTML = '<p class="text-muted">Không có thông tin GPU</p>'; return; }
 
     el.innerHTML = gpus.map((g, i) => {
-        const load = g.load_percent ?? 0;
+        const hasLoad = g.load_percent != null && !Number.isNaN(Number(g.load_percent));
+        const load = hasLoad ? Math.max(0, Math.min(100, Math.round(Number(g.load_percent)))) : 0;
+        const loadText = hasLoad ? `${load}%` : 'N/A';
         const vramTotal = g.vram_nvml_mb ?? g.vram_gputil_mb ?? g.vram_reported_mb ?? 0;
         const vramUsed = g.vram_used_mb ?? null;
         const vramPct = (vramTotal > 0 && vramUsed != null) ? Math.round((vramUsed / vramTotal) * 100) : null;
@@ -312,7 +375,7 @@ function renderGPU(data) {
                 <div class="gauge-wrapper" style="margin-bottom:12px;">
                     <div class="circular-gauge" style="--percent: ${load}; --gauge-color: #22c55e;">
                         <div class="circular-gauge-inner">
-                            <span class="gauge-value">${load}%</span>
+                            <span class="gauge-value">${loadText}</span>
                             <span class="gauge-label">GPU</span>
                         </div>
                     </div>
@@ -325,6 +388,7 @@ function renderGPU(data) {
                     </div>
                     ` : ''}
                     <div style="flex:1; min-width:160px;">
+                        ${infoRow('GPU Load', hasLoad ? `${load}%` : '<span class="text-muted">N/A (driver không hỗ trợ)</span>')}
                         ${infoRow('VRAM tổng', vramTotal ? `${vramTotal} MB` : 'N/A')}
                         ${vramUsed != null ? infoRow('VRAM đã dùng', `${vramUsed} MB`) : ''}
                         ${g.vram_free_mb != null ? infoRow('VRAM trống', `${g.vram_free_mb} MB`) : ''}
@@ -381,25 +445,6 @@ function renderDisk(data) {
                     <span class="io-label">Ghi</span>
                     <span class="io-value">${io.write_mb_s ?? 0} MB/s</span>
                 </div>
-                ${nio.total_recv_gb != null ? `
-                <div class="io-speed-item">
-                    <i class="fa-solid fa-database text-muted"></i>
-                    <span class="io-label">Tổng nhận</span>
-                    <span class="io-value">${nio.total_recv_gb} GB</span>
-                </div>
-                <div class="io-speed-item">
-                    <i class="fa-solid fa-database text-muted"></i>
-                    <span class="io-label">Tổng gửi</span>
-                    <span class="io-value">${nio.total_sent_gb} GB</span>
-                </div>
-                ` : ''}
-                ${nio.errors_in != null ? `
-                <div class="io-speed-item">
-                    <i class="fa-solid fa-triangle-exclamation text-danger"></i>
-                    <span class="io-label">Lỗi In/Out</span>
-                    <span class="io-value">${nio.errors_in} / ${nio.errors_out}</span>
-                </div>
-                ` : ''}
             </div>
             <div class="chart-container" style="height:120px; margin-bottom:20px;">
                 <canvas id="disk-io-chart"></canvas>
@@ -700,48 +745,70 @@ function buildLineChart(canvas, datasets, yMax = 100) {
     });
 }
 
-function updateCpuChart() {
-    const canvas = document.getElementById('cpu-chart');
+function upsertLineChart(key, canvasId, datasets, yMax) {
+    const canvas = document.getElementById(canvasId);
     if (!canvas) return;
-    if (cpuChart) cpuChart.destroy();
-    cpuChart = buildLineChart(canvas, [{
+
+    const existing = charts[key];
+    if (!existing || existing.canvas !== canvas) {
+        if (existing) existing.destroy();
+        charts[key] = buildLineChart(canvas, datasets, yMax);
+        return;
+    }
+
+    existing.data.datasets.forEach((ds, i) => {
+        if (datasets[i]) {
+            ds.data = [...datasets[i].data];
+            ds.label = datasets[i].label;
+            ds.borderColor = datasets[i].borderColor;
+            ds.backgroundColor = datasets[i].backgroundColor;
+        }
+    });
+
+    if (existing.options?.scales?.y) {
+        existing.options.scales.y.max = yMax;
+    }
+
+    existing.update('none');
+}
+
+function updateCpuChart() {
+    upsertLineChart('cpu', 'cpu-chart', [{
         label: 'CPU %',
-        data: [...cpuHistory],
+        data: cpuHistory,
         borderColor: '#06b6d4',
         backgroundColor: 'rgba(6,182,212,0.1)',
-        fill: true, tension: 0.3, pointRadius: 0,
-    }]);
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+    }], 100);
 }
 
 function updateRamChart() {
-    const canvas = document.getElementById('ram-chart');
-    if (!canvas) return;
-    if (ramChart) ramChart.destroy();
-    ramChart = buildLineChart(canvas, [{
+    upsertLineChart('ram', 'ram-chart', [{
         label: 'RAM %',
-        data: [...ramHistory],
+        data: ramHistory,
         borderColor: '#a855f7',
         backgroundColor: 'rgba(168,85,247,0.1)',
-        fill: true, tension: 0.3, pointRadius: 0,
-    }]);
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+    }], 100);
 }
 
 function updateNetChart() {
-    const canvas = document.getElementById('net-chart');
-    if (!canvas) return;
-    if (netChart) netChart.destroy();
     const maxVal = Math.max(...netSentHistory, ...netRecvHistory, 1);
-    netChart = buildLineChart(canvas, [
+    upsertLineChart('net', 'net-chart', [
         {
             label: 'Nhận (MB/s)',
-            data: [...netRecvHistory],
+            data: netRecvHistory,
             borderColor: '#22c55e',
             backgroundColor: 'rgba(34,197,94,0.1)',
             fill: true, tension: 0.3, pointRadius: 0,
         },
         {
             label: 'Gửi (MB/s)',
-            data: [...netSentHistory],
+            data: netSentHistory,
             borderColor: '#f59e0b',
             backgroundColor: 'rgba(245,158,11,0.1)',
             fill: true, tension: 0.3, pointRadius: 0,
@@ -750,21 +817,18 @@ function updateNetChart() {
 }
 
 function updateDiskIoChart() {
-    const canvas = document.getElementById('disk-io-chart');
-    if (!canvas) return;
-    if (diskIoChart) diskIoChart.destroy();
     const maxVal = Math.max(...diskReadHistory, ...diskWriteHistory, 1);
-    diskIoChart = buildLineChart(canvas, [
+    upsertLineChart('disk', 'disk-io-chart', [
         {
             label: 'Đọc (MB/s)',
-            data: [...diskReadHistory],
+            data: diskReadHistory,
             borderColor: '#06b6d4',
             backgroundColor: 'rgba(6,182,212,0.1)',
             fill: true, tension: 0.3, pointRadius: 0,
         },
         {
             label: 'Ghi (MB/s)',
-            data: [...diskWriteHistory],
+            data: diskWriteHistory,
             borderColor: '#ef4444',
             backgroundColor: 'rgba(239,68,68,0.1)',
             fill: true, tension: 0.3, pointRadius: 0,
@@ -791,6 +855,38 @@ function pushHistory() {
 }
 
 // ===== Main render =====
+function renderActiveSection() {
+    if (!currentData) return;
+    switch (currentSection) {
+        case 'cpu':
+            renderCPU(currentData);
+            break;
+        case 'ram':
+            renderRAM(currentData);
+            break;
+        case 'gpu':
+            renderGPU(currentData);
+            break;
+        case 'disk':
+            renderDisk(currentData);
+            break;
+        case 'network':
+            renderNetwork(currentData);
+            break;
+        case 'battery':
+            renderBattery(currentData);
+            break;
+        case 'os':
+            renderOS(currentData);
+            break;
+        case 'processes':
+            renderProcesses(currentData);
+            break;
+        default:
+            break;
+    }
+}
+
 function render(data) {
     currentData = data;
     pushHistory();
@@ -807,14 +903,7 @@ function render(data) {
         uptimeBadge.textContent = '⏱ ' + formatUptime(data.os.uptime_seconds);
     }
 
-    renderCPU(data);
-    renderRAM(data);
-    renderGPU(data);
-    renderDisk(data);
-    renderNetwork(data);
-    renderBattery(data);
-    renderOS(data);
-    renderProcesses(data);
+    renderActiveSection();
 }
 
 // ===== Poll =====
@@ -830,12 +919,78 @@ async function poll() {
     }
 }
 
+function stopPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+function schedulePolling() {
+    stopPolling();
+    const interval = document.hidden ? Math.max(refreshIntervalMs, 15000) : refreshIntervalMs;
+    pollTimer = setInterval(poll, interval);
+}
+
+function startPollingMode() {
+    usingSSE = false;
+    setConnectionMode('HTTP Polling', 'poll');
+    schedulePolling();
+    poll();
+}
+
+function stopStream() {
+    if (stream) {
+        stream.close();
+        stream = null;
+    }
+}
+
+function startStreamMode() {
+    if (!window.EventSource) {
+        startPollingMode();
+        return;
+    }
+
+    stopPolling();
+    stopStream();
+
+    try {
+        stream = new EventSource(STREAM_API);
+        usingSSE = true;
+        setConnectionMode('SSE Stream', 'sse');
+
+        stream.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                render(data);
+            } catch (e) {
+                console.error('SSE parse error', e);
+            }
+        };
+
+        stream.onerror = () => {
+            stopStream();
+            startPollingMode();
+        };
+    } catch (e) {
+        console.error('SSE init failed', e);
+        startPollingMode();
+    }
+}
+
 // ===== Init =====
 window.addEventListener('load', () => {
     initNavigation();
     initProcessTabs();
     initCopyButtons();
     initRefresh();
-    poll();
-    setInterval(poll, 3000);
+    initRefreshRateControl();
+    startStreamMode();
+
+    document.addEventListener('visibilitychange', () => {
+        if (!usingSSE) {
+            schedulePolling();
+        }
+    });
 });
